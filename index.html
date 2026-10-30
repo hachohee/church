@@ -468,7 +468,7 @@ function candleIn(gid, buf) {  // 남이 보낸 값은 믿지 않음: 자리 0~3
   try { const o = JSON.parse(buf.toString()); if (Number.isInteger(o.s) && o.s >= 0 && o.s < 40 && Number.isFinite(o.t)) { candles.set(gid, { s: o.s, t: o.t }); refreshCandles(); } } catch (e) {}
 }
 const mqNet = (() => {
-  const prefix = 'hachohee-church-v1/', id = Math.random().toString(36).slice(2, 10), others = new Map();
+  const prefix = 'online-church-v1/', id = Math.random().toString(36).slice(2, 10), others = new Map();
   const urls = ['wss://broker.emqx.io:8084/mqtt', 'wss://broker.hivemq.com:8884/mqtt'];
   let client = null, ok = false, last = 0, lastStr = '';
   function connect(i = 0) {
