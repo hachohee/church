@@ -1,0 +1,633 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>성당 — 온라인 성당</title>
+<style>
+  html,body{margin:0;height:100%;background:#d2cbbb;color:#2b2519;font:14px/1.5 system-ui,sans-serif;overflow:hidden}
+  canvas{display:block;touch-action:none}
+  #ui{position:fixed;left:0;right:0;bottom:12px;text-align:center;pointer-events:none}
+  #ui button[hidden]{display:none}
+  #ui button{pointer-events:auto;margin:0 4px;padding:8px 16px;border:1px solid #8a7a55;border-radius:20px;background:#fffaf0cc;color:inherit;font:inherit}
+  #pick{position:fixed;top:10px;right:10px;display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;max-width:70vw}
+  #pick button{padding:6px 12px;border:1px solid #8a7a55;border-radius:16px;background:#fffaf0cc;color:inherit;font:inherit;font-size:12px}
+  #pick button.on{background:#5a4a2a;color:#fff}
+  #toast{position:fixed;top:56px;left:50%;transform:translateX(-50%);padding:8px 16px;border-radius:16px;background:#2b2519dd;color:#fff;font-size:13px;opacity:0;transition:opacity .4s;pointer-events:none}
+  #net{position:fixed;top:10px;left:10px;padding:4px 10px;border-radius:12px;background:#fffaf0cc;border:1px solid #8a7a55;font-size:12px;max-width:42vw}
+  #gbp{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:min(92vw,380px);max-height:80vh;display:flex;flex-direction:column;gap:8px;padding:14px;border-radius:14px;background:#fffaf0f2;border:1px solid #8a7a55;box-shadow:0 6px 24px #0005}
+  #gbp[hidden]{display:none}
+  #gbl{overflow:auto;max-height:42vh;display:flex;flex-direction:column;gap:6px}
+  #gbl div{padding:6px 8px;border-radius:8px;background:#f1e8d4;font-size:13px;word-break:break-word}
+  #gbl small{opacity:.6}
+  #gbp input,#gbp button{font:inherit;padding:7px 10px;border:1px solid #8a7a55;border-radius:10px;background:#fff;color:inherit}
+  #hint{opacity:.7;margin-top:8px;font-size:12px}
+</style>
+</head>
+<body>
+<div id="net">실시간 확인 중…</div>
+<div id="pick"></div>
+<div id="gbp" hidden><b>고해성사실 방명록</b><div id="gbl"></div><input id="gbn" maxlength="12" placeholder="이름(별명)"><input id="gbm" maxlength="100" placeholder="한 줄 남기기 (개인정보는 쓰지 마세요)"><div style="display:flex;gap:6px"><button id="gbs" style="flex:1">남기기</button><button id="gbx">닫기</button></div><small id="gbi" style="opacity:.6"></small></div>
+<div id="toast"></div>
+<div id="ui">
+  <button id="veil">미사보: 없음</button>
+  <button id="bell">종 울리기</button>
+  <button id="hymn">성가 듣기</button>
+  <button id="asmr">자연 소리 ASMR 듣기</button>
+  <button id="pray" hidden>기도하기</button>
+  <button id="stand" hidden>일어나기</button>
+  <button id="gb" hidden>방명록</button>
+  <button id="exit" hidden>나오기</button>
+  <div id="hint">바닥 클릭 · WASD · 방향키로 이동 / 의자를 클릭하면 앉아요 / 드래그로 둘러보기</div>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mqtt/5.3.4/mqtt.min.js"></script>
+<script>
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xd2cbbb);
+scene.fog = new THREE.Fog(0xd2cbbb, 25, 80);
+const cam = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.1, 100);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+document.body.appendChild(renderer.domElement);
+
+const mat = c => new THREE.MeshStandardMaterial({ color: c, roughness: .9, side: THREE.DoubleSide });
+const texReg = [];
+const canvasTex = (w, h, draw, rx, ry) => {
+  const c = document.createElement('canvas'); c.width = w; c.height = h; draw(c.getContext('2d'), w, h);
+  const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(rx, ry);
+  texReg.push({ c, draw, t }); return t;
+};
+// ---------- 성당 스타일 (참고 사진 5장) ----------
+const CH = {
+  myeongdong: { name: '명동성당', bg: 0xd2cbbb, wall: '#e9e0cc', vaultCol: '#e9e0cc', vault: 'pointed', ribs: 'cross', ribBrick: 'gray', pier: 'gray', aisles: true,
+    floor: 'diamond', floorA: '#bdbab0', floorB: '#8f8c82', pew: '#7a4a26', glass: ['#3f6fc4', ['#c8a33a', '#b53a3a', '#7fb0e8']], win: 'lancet', altar: 'myeong', light: [0xfff6e6, 0x8b7d68, .8] },
+  village: { name: '푸른 벽돌 성당', bg: 0xe8dcc8, wall: '#f3ead8', vaultCol: '#f3dcc0', vault: 'round', ribs: 'transverse', ribBrick: 'blue', pier: 'blue',
+    floor: 'wood', floorA: '#c98a4a', floorB: '#a8672f', pew: '#9a5a28', glass: ['#e0b030', ['#d04a3a', '#3a78d0', '#3aa05a']], win: 'arched', altar: 'village', light: [0xfff2dc, 0x9a8264, 1] },
+  blackbrick: { name: '검은 벽돌 성당', bg: 0xe6e2da, wall: '#f4f1ea', vaultCol: '#f6f3ec', vault: 'round', ribs: 'transverse', ribBrick: 'black', pier: 'black',
+    floor: 'plain', floorA: '#b8b2a4', pew: '#8a5530', glass: ['#e8c040', ['#3aa070', '#d0503a', '#4a80d0']], win: 'arched', altar: 'black', light: [0xfff6e6, 0x8b7d68, .95], chandelier: true },
+  plain: { name: '분홍빛 소성당', bg: 0xe3d6d0, wall: '#e6cfc6', vaultCol: '#e8dccf', vault: 'barrel', ribs: 'none', pier: null,
+    floor: 'wood', floorA: '#a87c52', floorB: '#8a6038', pew: '#8a4e24', glass: ['#d86a50', ['#e8a040', '#c04040', '#4a78c8']], win: 'arched', altar: 'plain', light: [0xfff0e6, 0x8f7a6c, 1] },
+  hanoi: { name: '고딕 대성당', bg: 0xdcd6cc, wall: '#f1efe9', vaultCol: '#bcd3ca', vault: 'pointed', ribs: 'cross', ribBrick: 'rust', pier: 'white', aisles: true,
+    floor: 'plain', floorA: '#9a948a', pew: '#4a2a1a', glass: ['#3a68b8', ['#e0b030', '#c03a3a', '#4aa070']], win: 'lancet', altar: 'hanoi', light: [0xfff6e6, 0x7a6e60, .85], chandelier: true },
+};
+let cur = 'myeongdong', world = null;
+const seats = [], benchMeshes = [], fonts = [], boothDoors = [], booths = [];
+const std = map => new THREE.MeshStandardMaterial({ roughness: 1, side: THREE.DoubleSide, map });
+const BRICKS = {
+  gray: { mortar: '#8b8780', h: 35, s: 6, l: 52, v: 10 }, blue: { mortar: '#e6edf4', h: 215, s: 22, l: 55, v: 10 },
+  black: { mortar: '#d8d6d0', h: 0, s: 0, l: 14, v: 6 }, white: { mortar: '#efece4', h: 40, s: 20, l: 92, v: 3 },
+  rust: { mortar: '#7a3f24', h: 15, s: 45, l: 34, v: 4 },
+};
+const brickMat = (rx, ry, k) => std(canvasTex(128, 128, (g, w, h) => {
+  g.fillStyle = k.mortar; g.fillRect(0, 0, w, h);
+  for (let r = 0; r < 8; r++) for (let c = 0; c < 4; c++) {
+    g.fillStyle = `hsl(${k.h},${k.s}%,${k.l + Math.random() * k.v}%)`; g.fillRect(c * 32 + (r % 2) * 16 + 1, r * 16 + 1, 30, 14);
+  }
+}, rx, ry));
+const flat = (rx, ry, col) => std(canvasTex(64, 64, (g, w, h) => { g.fillStyle = col; g.fillRect(0, 0, w, h); }, rx, ry));
+const woodMat = (rx, ry, C) => std(canvasTex(128, 128, (g, w, h) => {
+  g.fillStyle = C.pew; g.fillRect(0, 0, w, h); g.strokeStyle = 'rgba(0,0,0,.18)';
+  for (let y = 6; y < h; y += 14) { g.beginPath(); g.moveTo(0, y); g.lineTo(w, y + 2); g.stroke(); }
+}, rx, ry));
+function floorMat(C) {
+  const draw = {
+    diamond: (g, w, h) => {
+      g.fillStyle = C.floorA; g.fillRect(0, 0, w, h); g.strokeStyle = C.floorB; g.lineWidth = 3;
+      g.beginPath(); g.moveTo(w / 2, 0); g.lineTo(w, h / 2); g.lineTo(w / 2, h); g.lineTo(0, h / 2); g.closePath(); g.stroke();
+    },
+    wood: (g, w, h) => {
+      g.fillStyle = C.floorA; g.fillRect(0, 0, w, h); g.strokeStyle = C.floorB; g.lineWidth = 2;
+      for (let x = 0; x < w; x += 32) { g.beginPath(); g.moveTo(x, 0); g.lineTo(x, h); g.stroke(); }
+    },
+    plain: (g, w, h) => { g.fillStyle = C.floorA; g.fillRect(0, 0, w, h); g.strokeStyle = 'rgba(0,0,0,.12)'; g.strokeRect(0, 0, w, h); },
+  }[C.floor];
+  const rep = { diamond: [8, 25], wood: [3, 12], plain: [6, 20] }[C.floor];
+  return new THREE.MeshStandardMaterial({ roughness: .6, map: canvasTex(128, 128, draw, ...rep) });
+}
+function glassMat(C) {
+  const t = canvasTex(64, 256, (g, w, h) => {
+    g.fillStyle = C.glass[0]; g.fillRect(0, 0, w, h);
+    for (let y = 0; y < h; y += 32) for (let x = 0; x < w; x += 32) if (Math.random() < .35) { g.fillStyle = C.glass[1][Math.random() * 3 | 0]; g.fillRect(x, y, 32, 32); }
+    g.strokeStyle = '#1d2c4a'; g.lineWidth = 3;
+    for (let y = 0; y <= h; y += 32) { g.beginPath(); g.moveTo(0, y); g.lineTo(w, y); g.stroke(); }
+    g.beginPath(); g.moveTo(w / 2, 0); g.lineTo(w / 2, h); g.stroke();
+  }, 1, 1);
+  t.repeat.set(1 / 1.4, 1 / 4); // 창 UV는 월드 단위
+  return new THREE.MeshBasicMaterial({ map: t, side: THREE.DoubleSide });
+}
+
+// 뾰족 아치 띠(고딕): 폭 w, 두께 th, 깊이 depth. 아치 평면은 xy, 깊이는 +z
+function pointedBand(w, th, depth) {
+  const pt = (R, a) => [w / 2 + R * Math.cos(a), R * Math.sin(a)];
+  const a0 = Math.PI, a1 = 2 * Math.PI / 3, ai = Math.acos(-w / (2 * (w - th))), N = 14;
+  const arc = (R, from, to) => Array.from({ length: N + 1 }, (_, i) => pt(R, from + (to - from) * i / N));
+  const L = arc(w, a0, a1), Li = arc(w - th, a0, ai);
+  const sh = new THREE.Shape();
+  sh.moveTo(...L[0]); L.slice(1).forEach(p => sh.lineTo(...p));
+  L.slice().reverse().slice(1).forEach(p => sh.lineTo(-p[0], p[1]));
+  sh.lineTo(w / 2 - th, 0);
+  Li.slice().reverse().forEach(p => sh.lineTo(-p[0], p[1]));
+  Li.slice(1).forEach(p => sh.lineTo(...p));
+  return new THREE.ExtrudeGeometry(sh, { depth, bevelEnabled: false });
+}
+// 반원 아치 띠
+function roundBand(w, th, depth) {
+  const R = w / 2, N = 20, sh = new THREE.Shape(); sh.moveTo(-R, 0);
+  for (let i = 1; i <= N; i++) { const a = Math.PI - Math.PI * i / N; sh.lineTo(R * Math.cos(a), R * Math.sin(a)); }
+  sh.lineTo(R - th, 0);
+  for (let i = N - 1; i >= 0; i--) { const a = Math.PI - Math.PI * i / N; sh.lineTo((R - th) * Math.cos(a), (R - th) * Math.sin(a)); }
+  return new THREE.ExtrudeGeometry(sh, { depth, bevelEnabled: false });
+}
+// 첨두창(란셋)과 반원창
+function lancet(w, h, m) {
+  const sh = new THREE.Shape(); sh.moveTo(-w / 2, 0); sh.lineTo(w / 2, 0); sh.lineTo(w / 2, h);
+  sh.quadraticCurveTo(w / 2, h + w * .8, 0, h + w * .9); sh.quadraticCurveTo(-w / 2, h + w * .8, -w / 2, h);
+  return new THREE.Mesh(new THREE.ShapeGeometry(sh), m);
+}
+function arched(w, h, m) {
+  const sh = new THREE.Shape(); sh.moveTo(-w / 2, 0); sh.lineTo(w / 2, 0); sh.lineTo(w / 2, h); sh.absarc(0, h, w / 2, 0, Math.PI, false); sh.lineTo(-w / 2, 0);
+  return new THREE.Mesh(new THREE.ShapeGeometry(sh), m);
+}
+
+function buildChurch(key) {
+  const C = CH[key]; cur = key;
+  if (world) { scene.remove(world); world.traverse(o => o.geometry && o.geometry.dispose()); }
+  texReg.length = 0;
+  world = new THREE.Group(); scene.add(world);
+  scene.background.set(C.bg); scene.fog.color.set(C.bg);
+  seats.length = 0; benchMeshes.length = 0; fonts.length = 0; boothDoors.length = 0; booths.length = 0;
+  const add = (geo, m, x, y, z) => { const o = new THREE.Mesh(geo, m); o.position.set(x, y, z); world.add(o); return o; };
+  const put = (o, x, y, z, ry = 0) => { o.position.set(x, y, z); o.rotation.y = ry; world.add(o); return o; };
+  const wall = (rx, ry) => flat(rx, ry, C.wall);
+  const gl = glassMat(C), ribM = C.ribBrick && brickMat(.5, .5, BRICKS[C.ribBrick]);
+  const win = (w, h) => (C.win === 'lancet' ? lancet : arched)(w, h, gl);
+  const spring = { pointed: 14, round: 10, barrel: 11 }[C.vault], W = C.aisles ? 16 : 9;
+
+  add(new THREE.PlaneGeometry(W, 50), floorMat(C), 0, 0, 0).rotation.x = -Math.PI / 2;
+  add(new THREE.BoxGeometry(W, 22, .4), wall(4, 5), 0, 11, 25);
+  add(new THREE.BoxGeometry(W, 22, .4), wall(4, 5), 0, 11, -25);
+
+  // 천장(볼트)
+  const vg = C.vault === 'pointed' ? pointedBand(8, .3, 50) : roundBand(8, .3, 50);
+  const vault = new THREE.Mesh(vg, flat(1, 1, C.vaultCol)); vault.position.set(0, spring, -25);
+  if (C.vault === 'barrel') vault.scale.y = .4; world.add(vault);
+
+  if (C.aisles) {  // 측랑 + 아케이드 + 고창 (명동성당, 고딕 대성당)
+    for (const s of [-1, 1]) {
+      add(new THREE.PlaneGeometry(4.4, 50), wall(2, 12), s * 6, 9, 0).rotation.x = Math.PI / 2;
+      add(new THREE.BoxGeometry(.4, 9, 50), wall(12, 3), s * 8, 4.5, 0);
+      add(new THREE.BoxGeometry(.4, 5, 50), wall(12, 2), s * 4, 11.5, 0);
+      for (let z = -22; z <= 22; z += 4) if (z !== 18) put(win(1, 3), s * 7.75, 3, z, -s * Math.PI / 2);
+    }
+    const pierM = brickMat(1, 7, BRICKS[C.pier]);
+    for (let z = -20; z <= 20; z += 5) {
+      put(new THREE.Mesh(pointedBand(8, .8, .6), ribM), 0, 14, z - .3);
+      for (const s of [-1, 1]) {
+        add(new THREE.BoxGeometry(1.1, 14, 1.1), pierM, s * 4, 7, z);
+        if (C.pier === 'white') add(new THREE.BoxGeometry(1.6, .35, 1.6), flat(1, 1, '#f6f4ee'), s * 4, 8.5, z);
+        if (z < 20) {
+          put(new THREE.Mesh(pointedBand(5, .55, .9), flat(1, 1, C.pier === 'white' ? '#f4f2ec' : '#8b8780')), s * 4 - .45, 6, z + 2.5, Math.PI / 2);
+          for (const dz of [1.1, 3.9]) put(win(1, 2.6), s * 3.78, 10.6, z + dz, -s * Math.PI / 2);
+          for (const [a, b] of [[-4, 4], [4, -4]]) {
+            const c = new THREE.QuadraticBezierCurve3(new THREE.Vector3(a, 14, z), new THREE.Vector3(0, 25, z + 2.5), new THREE.Vector3(b, 14, z + 5));
+            add(new THREE.TubeGeometry(c, 20, .09, 6), ribM, 0, 0, 0);
+          }
+        }
+      }
+    }
+  } else {  // 측랑 없는 성당: 벽 + 벽기둥 + 반원 아치 리브
+    for (const s of [-1, 1]) add(new THREE.BoxGeometry(.4, spring, 50), wall(12, 3), s * 4.2, spring / 2, 0);
+    for (let z = -20; z <= 20; z += 5) {
+      if (C.ribs === 'transverse') put(new THREE.Mesh(roundBand(8, .8, .6), ribM), 0, spring, z - .3);
+      for (const s of [-1, 1]) if (C.pier) add(new THREE.BoxGeometry(.9, spring, .9), brickMat(1, 5, BRICKS[C.pier]), s * 3.65, spring / 2, z);
+    }
+    for (const s of [-1, 1]) for (let z = -20; z < 20; z += 5) if (z !== 15) put(win(1.3, 3.2), s * 3.98, 3.6, z + 2.5, -s * Math.PI / 2);
+  }
+
+  // 제단: 단 + 카펫 + 제대 + 성당마다 다른 뒷벽
+  const gold = mat(0xd9b44a), brown = mat(0x6e4224);
+  const cross = (x, y, z, h = 2.2, w = 1.2, m = gold) => { add(new THREE.BoxGeometry(.15, h, .15), m, x, y, z); add(new THREE.BoxGeometry(w, .15, .15), m, x, y + h * .25, z); };
+  add(new THREE.BoxGeometry(9, .3, 6.5), mat(0xcfc8b8), 0, .15, -21.5);
+  add(new THREE.BoxGeometry(2.4, .02, 3.2), mat(0x9a1a1a), 0, .01, -17.6);
+  add(new THREE.BoxGeometry(3, 1, 1.4), mat(0xf0ece2), 0, .8, -21);
+  if (C.altar === 'myeong') {
+    cross(0, 3.9, -23); add(new THREE.BoxGeometry(7, 6, .4), mat(0xcdb88a), 0, 3.3, -24.6);
+    for (let i = -3; i <= 3; i++) put(lancet(.6, 1.6, mat(0x5a4328)), i * .95, 2.2, -24.38);
+    [[-3, 3.4], [-1.5, 4.4], [0, 5.4], [1.5, 4.4], [3, 3.4]].forEach(([x, h]) => put(lancet(1.1, h, gl), x, 7.5, -24.78));
+  } else if (C.altar === 'village') {
+    for (const x of [-3, 3]) { put(arched(1.4, 2.4, brown), x, 0, -24.78); add(new THREE.BoxGeometry(.5, 1.3, .35), mat(0xe8e0d0), x * 1.1, 3.8, -24.6); }
+    cross(0, 4.4, -24.7, 2.6, 1.4);
+    for (let i = -2; i <= 2; i++) add(new THREE.CylinderGeometry(.04, .04, .7, 6), mat(0xfff2c0), i * .5, 1.5, -21.2);
+  } else if (C.altar === 'black') {
+    [[-2.6, 4.6], [0, 6], [2.6, 4.6]].forEach(([x, h]) => put(arched(1.5, h, gl), x, 3.4, -24.78));
+    cross(0, 2.6, -24.7, 1.8, 1);
+  } else if (C.altar === 'plain') {
+    put(arched(5, 4, mat(0xf3e8d8)), 0, 1.5, -24.78); cross(0, 4.4, -24.7, 3.4, 1.9, mat(0x6a3f1f));
+    for (const x of [-3.2, 3.2]) put(arched(1.2, 3.4, gl), x, 3, -24.78);
+  } else if (C.altar === 'hanoi') {
+    add(new THREE.BoxGeometry(7.5, 10, .5), mat(0xc9a24a), 0, 5, -24.6);
+    for (let i = -2; i <= 2; i++) put(lancet(.8, 2.4, mat(0x6a4a22)), i * 1.3, 2.4, -24.3);
+    [[-2, 3.4], [0, 5.4], [2, 3.4]].forEach(([x, h]) => put(lancet(1.1, h, gl), x, 11, -24.78));
+    cross(0, 6.2, -24.2, 2, 1.2);
+  }
+
+  // 뒤쪽 출입문(비상구 표시)과 성수대 두 곳
+  put(arched(3, 3.2, mat(0xd8d0bc)), 0, 0, 24.79);
+  put(arched(2.6, 3, mat(0x5a3a1e)), 0, 0, 24.77);
+  add(new THREE.BoxGeometry(.04, 2.9, .02), mat(0x2a1a0c), 0, 1.45, 24.75);
+  for (const x of [-.25, .25]) add(new THREE.BoxGeometry(.08, .08, .06), gold, x, 1.2, 24.74);
+  add(new THREE.BoxGeometry(.9, .35, .05), new THREE.MeshBasicMaterial({ color: 0x2fae5a }), 0, 4.1, 24.76);
+  const stone = mat(0xb9b2a4);
+  for (const x of [-2.1, 2.1]) {
+    fonts.push(add(new THREE.CylinderGeometry(.22, .28, .9, 12), stone, x, .45, 24.2),
+               add(new THREE.CylinderGeometry(.42, .26, .2, 16), stone, x, .98, 24.2));
+    add(new THREE.CylinderGeometry(.34, .34, .02, 16), new THREE.MeshBasicMaterial({ color: 0x7fb4d8 }), x, 1.06, 24.2);
+  }
+
+  // 고해성사실: 좌우 벽 속에 고해자 방 하나 + 신부님 방 하나(문 두 개, 안내판, 표시등). 측랑이 있으면 측랑 바깥 벽, 없으면 양옆 벽
+  const wd = mat(0x4a2c16), wallX = C.aisles ? 7.8 : 4.0;
+  const sign = txt => { const t = new THREE.CanvasTexture(Object.assign(document.createElement('canvas'), { width: 256, height: 80 }));
+    const g = t.image.getContext('2d'); g.fillStyle = '#1f8a6a'; g.fillRect(0, 0, 256, 80); g.fillStyle = '#fff'; g.font = 'bold 44px sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(txt, 128, 42);
+    return new THREE.MeshBasicMaterial({ map: t }); };
+  const signs = { P: sign('고해자'), R: sign('신부님') };
+  for (const s of [-1, 1]) {
+    // 벽 앞면: 문틀 + 두 개의 문
+    const g = new THREE.Group(); g.position.set(s * (wallX - .05), 0, 17.5); g.rotation.y = -s * Math.PI / 2; world.add(g);
+    const part = (geo, m, x, y, z) => { const o = new THREE.Mesh(geo, m); o.position.set(x, y, z); g.add(o); return o; };
+    part(new THREE.BoxGeometry(2.5, 3.1, .12), wd, 0, 1.55, 0);
+    part(new THREE.BoxGeometry(2.7, .18, .3), mat(0x3a2210), 0, 3.2, .08);
+    // 월드 z=18.05 가 고해자 방, 16.95 가 신부님 방 (벽을 바라보는 방향이 s에 따라 뒤집힘)
+    for (const [role, wz] of [['P', 18.05], ['R', 16.95]]) {
+      const lx = s * (wz - 17.5);
+      const d = arched(.62, 1.9, mat(role === 'P' ? 0x7a1f2a : 0x2a180a)); d.position.set(lx, .05, .08); d.userData = { s, role, z: wz }; boothDoors.push(d); g.add(d);
+      part(new THREE.BoxGeometry(.05, .12, .05), gold, lx + .22, 1.0, .1);
+      const sg = new THREE.Mesh(new THREE.PlaneGeometry(.7, .22), signs[role]); sg.position.set(lx, 2.45, .09); g.add(sg);
+      part(new THREE.BoxGeometry(.1, .1, .04), new THREE.MeshBasicMaterial({ color: 0xd22a2a }), lx, 2.8, .1);
+    }
+    part(new THREE.BoxGeometry(.06, .4, .06), gold, 0, 3.55, .1); part(new THREE.BoxGeometry(.26, .06, .06), gold, 0, 3.62, .1);
+
+    // 들어가면 보이는 내부: 벽 바깥쪽의 닫힌 방 2개(가운데 칸막이에 격자창)
+    const cellX = s * (wallX + 1.05); booths.push({ s, x: cellX });
+    const cg = new THREE.Group(); cg.position.set(cellX, 0, 17.5); world.add(cg);
+    const cp = (geo, m, x, y, z) => { const o = new THREE.Mesh(geo, m); o.position.set(x, y, z); cg.add(o); return o; };
+    const inW = mat(0x6a4020), bar = mat(0xb08a3a);
+    cp(new THREE.BoxGeometry(1.2, .05, 2.2), inW, 0, .025, 0); cp(new THREE.BoxGeometry(1.2, .05, 2.2), inW, 0, 2.6, 0);
+    for (const e of [-1.1, 1.1]) cp(new THREE.BoxGeometry(1.2, 2.6, .05), inW, 0, 1.3, e);
+    cp(new THREE.BoxGeometry(.05, 2.6, 2.2), inW, s * .6, 1.3, 0); cp(new THREE.BoxGeometry(.04, 2.6, 2.2), inW, -s * .58, 1.3, 0);
+    cp(new THREE.BoxGeometry(1.2, 2.6, .04), inW, 0, 1.3, 0);                           // 가운데 칸막이
+    cp(new THREE.BoxGeometry(.5, .6, .05), mat(0x1a0f06), -s * .25, 1.5, 0);            // 격자창
+    for (const f of [-.03, .03]) {
+      for (let i = -2; i <= 2; i++) cp(new THREE.BoxGeometry(.012, .6, .012), bar, -s * .25 + i * .1, 1.5, f);
+      for (let j = -1; j <= 2; j++) cp(new THREE.BoxGeometry(.5, .012, .012), bar, -s * .25, 1.5 + (j - .5) * .15, f);
+    }
+    cp(new THREE.BoxGeometry(.5, .15, .35), inW, -s * .25, .3, .4); cp(new THREE.BoxGeometry(.5, .04, .35), mat(0x7a1f2a), -s * .25, .39, .4);   // 고해자 무릎받침
+    cp(new THREE.BoxGeometry(.4, .45, .4), inW, -s * .25, .22, -.5); cp(new THREE.BoxGeometry(.4, .5, .06), inW, -s * .25, .7, -.7);             // 신부님 의자
+    for (const z of [.2, -.2]) { cp(new THREE.BoxGeometry(.5, .03, .3), inW, -s * .25, 1.0, z); cp(new THREE.BoxGeometry(.28, .05, .2), mat(0x7a1f2a), -s * .25, 1.045, z); }   // 방명록 책
+    for (const z of [-.55, .55]) { const lamp = new THREE.PointLight(0xffd9a0, .8, 4); lamp.position.set(0, 2.2, z); cg.add(lamp); }
+  }
+
+  // 벤치: 좌석 2개씩. 앉는 위치는 seats[], 클릭 대상은 benchMeshes[]
+  const dark = woodMat(2, 1, C);
+  for (let z = -14; z <= 16; z += 2.2) for (const s of [-1, 1]) {
+    const x = s * 2.2;
+    benchMeshes.push(add(new THREE.BoxGeometry(3, .1, .8), dark, x, .45, z), add(new THREE.BoxGeometry(3, .9, .08), dark, x, .95, z + .4));
+    for (const e of [-1, 1]) add(new THREE.BoxGeometry(.1, .45, .8), dark, x + e * 1.45, .22, z);
+    for (const e of [-.7, .7]) seats.push({ x: x + e, z });
+  }
+
+  // 샹들리에와 빛
+  if (C.chandelier) for (const z of [-12, 0, 12]) {
+    const g = new THREE.Group(), y = spring + (C.vault === 'pointed' ? 4 : 0) - 2.5;
+    const bulb = new THREE.MeshBasicMaterial({ color: 0xffe2a0 });
+    g.add(new THREE.Mesh(new THREE.CylinderGeometry(.02, .02, 3, 6), mat(0x2a2a2a)));
+    for (let i = 0; i < 4; i++) { const b = new THREE.Mesh(new THREE.SphereGeometry(.14, 8, 8), bulb); const a = i * Math.PI / 2; b.position.set(Math.cos(a) * .5, -1.6, Math.sin(a) * .5); g.add(b); }
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(.5, .03, 6, 16), mat(0x2a2a2a)); ring.rotation.x = Math.PI / 2; ring.position.y = -1.6; g.add(ring);
+    g.position.set(0, y + 1.5, z); world.add(g);
+  }
+  world.add(new THREE.HemisphereLight(...C.light));
+  for (const z of [-15, -5, 5, 15]) { const l = new THREE.PointLight(0xffe9c4, .25, 24); l.position.set(0, Math.min(10, spring - 1), z); world.add(l); }
+}
+
+// 아바타: 몸통 + 머리(고개 숙임) + 합장한 손 + 앉을 때 무릎
+function makeAvatar(hue) {
+  const g = new THREE.Group();
+  const part = (geo, color, x, y, z, parent = g) => {
+    const m = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color, roughness: .8 }));
+    m.position.set(x, y, z); parent.add(m); return m;
+  };
+  const cloth = new THREE.Color().setHSL(hue, .55, .5), skin = 0xe6c3a0;
+  part(new THREE.CylinderGeometry(.22, .28, 1, 12), cloth, 0, .8, 0);
+  const head = new THREE.Group(); head.position.y = 1.35; g.add(head);
+  part(new THREE.SphereGeometry(.2, 16, 12), skin, 0, .2, 0, head);
+  part(new THREE.BoxGeometry(.06, .06, .08), skin, 0, .18, -.2, head);
+  // 미사보: 머리 덮개 + 뒤로 늘어지는 천(흰색/검정)
+  const vm = new THREE.MeshStandardMaterial({ color: 0xf5f2ea, roughness: 1, side: THREE.DoubleSide }), veil = new THREE.Group(); veil.visible = false; head.add(veil);
+  const cap = new THREE.Mesh(new THREE.SphereGeometry(.225, 16, 12, 0, Math.PI * 2, 0, Math.PI * .55), vm); cap.position.y = .2; cap.rotation.x = .25; veil.add(cap);
+  const drape = new THREE.Mesh(new THREE.CylinderGeometry(.22, .3, .55, 14, 1, true, -Math.PI * .55, Math.PI * 1.1), vm); drape.position.set(0, -.05, .04); veil.add(drape);
+  g.veil = veil; g.veilMat = vm; g.veilV = 0;
+  g.hands = part(new THREE.SphereGeometry(.08, 8, 8), skin, 0, 1.05, -.3);
+  g.knees = part(new THREE.BoxGeometry(.5, .14, .5), cloth, 0, .6, -.3);
+  g.head = head; scene.add(g); return g;
+}
+function setVeil(av, v) { av.veilV = v; av.veil.visible = v > 0; av.veilMat.color.set(v === 2 ? 0x1a1a1a : 0xf5f2ea); }
+function pose(av, x, z, yaw, seat, pray) {
+  av.position.set(x, seat >= 0 ? .2 : 0, z); av.rotation.y = yaw;
+  av.head.rotation.x = pray ? -.6 : 0;
+  av.hands.visible = !!pray; av.knees.visible = seat >= 0;
+}
+
+buildChurch('myeongdong');
+
+// 이동·시점 (3인칭: 내 아바타를 따라가는 궤도 카메라)
+const hue = Math.random(), me = makeAvatar(hue);
+let myVeil = 0; try { myVeil = +localStorage.getItem('veil') || 0; } catch (e) {}
+const veilBtn = document.getElementById('veil'), VEIL = ['없음', '흰색', '검정'];
+const applyVeil = () => { setVeil(me, myVeil); veilBtn.textContent = '미사보: ' + VEIL[myVeil]; try { localStorage.setItem('veil', myVeil); } catch (e) {} };
+veilBtn.onclick = () => { myVeil = (myVeil + 1) % 3; applyVeil(); };
+applyVeil();
+const keys = {}; let yaw = 0, pitch = .12, goal = null, wantSeat = -1, wantBless = false, wantBooth = 0, boothSide = 0, blessUntil = 0, seated = -1, pray = false;
+const pos = new THREE.Vector3(0, 0, 22), faceYaw = { v: 0 };
+const toast = document.getElementById('toast'); let toastT;
+const say = m => { toast.textContent = m; toast.style.opacity = 1; clearTimeout(toastT); toastT = setTimeout(() => toast.style.opacity = 0, 2500); };
+const standBtn = document.getElementById('stand'), prayBtn = document.getElementById('pray');
+let others = {};  // peer -> avatar
+let room = null;
+// 로그인 없이도 위치를 주고받기 위한 공개 MQTT 중계(위치·색깔만 전송). 연결되면 이걸 쓰고, 안 되면 room(로그인한 사람끼리)을 씀
+const guests = new Map(); let renderGuests = () => {};
+const clean = (v, n) => String(v).replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, n);
+function guestIn(gid, buf) {  // 남이 쓴 글은 믿지 않음: 길이 제한, 문자열만, 최대 200개
+  if (!buf.length) { guests.delete(gid); renderGuests(); return; }
+  if (buf.length > 600 || (!guests.has(gid) && guests.size >= 200)) return;
+  try { const o = JSON.parse(buf.toString()); if (typeof o.n === 'string' && typeof o.m === 'string' && Number.isFinite(o.t)) { guests.set(gid, { n: clean(o.n, 12), m: clean(o.m, 100), t: o.t }); renderGuests(); } } catch (e) {}
+}
+const mqNet = (() => {
+  const prefix = 'hachohee-church-v1/', id = Math.random().toString(36).slice(2, 10), others = new Map();
+  const urls = ['wss://broker.emqx.io:8084/mqtt', 'wss://broker.hivemq.com:8884/mqtt'];
+  let client = null, ok = false, last = 0, lastStr = '';
+  function connect(i = 0) {
+    if (!window.mqtt || i >= urls.length) return;
+    let alive = false;
+    let c; try { c = mqtt.connect(urls[i], { connectTimeout: 6000, reconnectPeriod: 3000, clientId: 'ch_' + id, will: { topic: prefix + id, payload: '' } }); } catch (e) { return connect(i + 1); }  // 보안 설정이 외부 접속을 막으면 여기로 옴
+    c.on('connect', () => { alive = true; ok = true; client = c; c.subscribe(prefix + '+'); c.subscribe(prefix + 'guest/+'); });
+    c.on('message', (t, m) => {
+      if (t.startsWith(prefix + 'guest/')) { guestIn(t.slice(prefix.length + 6), m); return; }
+      const pid = t.slice(prefix.length); if (pid === id || m.length > 300) return;  // 공개 채널이라 남이 보낸 값은 믿지 않음
+      if (!others.has(pid) && others.size >= 60) return;
+      if (!m.length) { others.delete(pid); return; }
+      try { others.set(pid, { presence: JSON.parse(m.toString()), t: Date.now() }); } catch (e) {}
+    });
+    c.on('close', () => { ok = false; if (!alive) { c.end(true); connect(i + 1); } });  // 처음부터 접속이 안 되면 다음 서버
+    c.on('error', () => {});
+  }
+  connect();
+  return {
+    get ok() { return ok; },
+    guestPublish(gid, o) { if (!client || !ok) return false; client.publish(prefix + 'guest/' + gid, JSON.stringify(o), { retain: true, qos: 1 }); return true; },
+    presence(p) {  // 바뀌면 최대 10번/초, 안 바뀌어도 2초마다 생존 신호
+      const s = JSON.stringify(p), now = Date.now();
+      if (client && ok && ((s !== lastStr && now - last > 100) || now - last > 2000)) { lastStr = s; last = now; client.publish(prefix + id, s); }
+    },
+    peers() {
+      const now = Date.now(), out = [];
+      for (const [k, v] of others) { if (now - v.t > 7000) others.delete(k); else out.push({ isMe: false, peer: k, presence: v.presence }); }
+      return out;
+    },
+  };
+})();
+const net = () => (mqNet.ok ? mqNet : room);
+// 지금 실시간이 되는지 화면에 표시 (안 되면 이유를 알 수 있게)
+setInterval(() => {
+  const n = net(), el = document.getElementById('net');
+  el.textContent = !n ? '실시간 연결 안 됨 · 혼자 보는 중' : `실시간 연결됨(${n === mqNet ? '서버' : '로그인'}) · 다른 사람 ${n.peers().filter(p => !p.isMe && p.presence.church === cur).length}명`;
+  el.title = !n ? '이 페이지가 외부 서버 접속을 막는 환경(예: claude.ai 안)이면 다른 사람이 보이지 않아요.' : '';
+}, 1000);
+const takenSeats = () => new Set(net() ? net().peers().filter(p => !p.isMe && p.presence.church === cur).map(p => p.presence.seat) : []);
+
+const exitBtn = document.getElementById('exit'), gbBtn = document.getElementById('gb'), gbp = document.getElementById('gbp');
+const gbl = document.getElementById('gbl'), gbn = document.getElementById('gbn'), gbm = document.getElementById('gbm'), gbi = document.getElementById('gbi');
+try { (JSON.parse(localStorage.getItem('gb-local') || '[]')).forEach(([k, o]) => guestIn(k, JSON.stringify(o))); gbn.value = localStorage.getItem('gb-name') || ''; } catch (e) {}
+renderGuests = () => {
+  gbl.replaceChildren(...[...guests.values()].sort((a, b) => b.t - a.t).slice(0, 40).map(o => {
+    const d = document.createElement('div'), n = document.createElement('b'), t = document.createElement('small');
+    n.textContent = o.n || '익명'; t.textContent = ' ' + new Date(o.t).toLocaleDateString('ko-KR'); d.append(n, t, document.createElement('br'), o.m); return d;
+  }));
+  if (!guests.size) gbl.textContent = '아직 글이 없어요. 첫 글을 남겨 보세요.';
+};
+let lastPost = 0;
+gbBtn.onclick = () => { gbp.hidden = false; gbi.textContent = mqNet.ok ? '' : '서버에 연결되지 않아 이 기기에만 저장돼요.'; renderGuests(); };
+document.getElementById('gbx').onclick = () => { gbp.hidden = true; };
+document.getElementById('gbs').onclick = () => {
+  const o = { n: clean(gbn.value, 12), m: clean(gbm.value, 100), t: Date.now() };
+  if (!o.m) return;
+  if (Date.now() - lastPost < 15000) { gbi.textContent = '잠시 후에 다시 남겨 주세요.'; return; }
+  lastPost = Date.now(); const gid = o.t.toString(36) + Math.random().toString(36).slice(2, 6);
+  guests.set(gid, o); renderGuests(); gbm.value = '';
+  try { localStorage.setItem('gb-name', o.n); } catch (e) {}
+  if (!mqNet.guestPublish(gid, o)) { gbi.textContent = '서버에 연결되지 않아 이 기기에만 저장돼요.'; try { const l = JSON.parse(localStorage.getItem('gb-local') || '[]'); l.push([gid, o]); localStorage.setItem('gb-local', JSON.stringify(l.slice(-30))); } catch (e) {} }
+  else gbi.textContent = '남겼어요.';
+};
+function enterBooth(b) {  // b = {s: 좌/우, role: 'P' 고해자 | 'R' 신부님, z}
+  boothSide = b; pos.set(b.s * 3.3, 0, b.z); yaw = b.role === 'P' ? 0 : Math.PI; pitch = .12; me.visible = false; exitBtn.hidden = false; gbBtn.hidden = false;
+  say(b.role === 'P' ? '고해자 방에 들어왔어요' : '신부님 방에 들어왔어요');
+}
+function exitBooth() {
+  const b = boothSide; boothSide = 0; me.visible = true; exitBtn.hidden = true; gbBtn.hidden = true; gbp.hidden = true; pos.set(b.s * 3.3, 0, b.z); faceYaw.v = b.s * Math.PI / 2; yaw = b.s * Math.PI / 2;
+}
+exitBtn.onclick = exitBooth;
+function stand() {
+  if (seated < 0) return;
+  pos.x = Math.sign(seats[seated].x) * .4; seated = -1; pray = false;
+  standBtn.hidden = prayBtn.hidden = true;
+}
+standBtn.onclick = stand;
+prayBtn.onclick = () => { pray = !pray; prayBtn.textContent = pray ? '고개 들기' : '기도하기'; };
+const typing = e => /INPUT|TEXTAREA/.test(e.target.tagName);
+addEventListener('keydown', e => { if (!typing(e)) keys[e.code] = true; });
+addEventListener('keyup', e => { keys[e.code] = false; });
+const ray = new THREE.Raycaster(), floor = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+let down = null, dragged = false;
+const cv = renderer.domElement;
+cv.addEventListener('pointerdown', e => { down = [e.clientX, e.clientY]; dragged = false; });
+cv.addEventListener('pointermove', e => {
+  if (!down) return;
+  const dx = e.clientX - down[0], dy = e.clientY - down[1];
+  if (Math.abs(dx) + Math.abs(dy) > 3) dragged = true;
+  yaw -= dx * .005; pitch = Math.max(-.1, Math.min(1.2, pitch + dy * .005)); down = [e.clientX, e.clientY];
+});
+cv.addEventListener('pointerup', e => {
+  if (!dragged) {
+    ray.setFromCamera({ x: e.clientX / innerWidth * 2 - 1, y: -(e.clientY / innerHeight) * 2 + 1 }, cam);
+    const hit = ray.intersectObjects(benchMeshes)[0], fh = ray.intersectObjects(fonts)[0], bh = ray.intersectObjects(boothDoors)[0], p = new THREE.Vector3();
+    if (fh) { stand(); wantSeat = -1; wantBless = true; goal = new THREE.Vector3(fh.object.position.x, 0, 23.2); }
+    else if (bh) { stand(); wantSeat = -1; wantBless = false; wantBooth = 0; wantBooth = bh.object.userData; goal = new THREE.Vector3(wantBooth.s * 3.3, 0, wantBooth.z); }
+    else if (hit) {  // 가장 가까운 빈 좌석으로 걸어가서 앉기
+      const taken = takenSeats(); let best = -1, bd = 1e9;
+      seats.forEach((st, i) => {
+        const d = Math.hypot(st.x - hit.point.x, st.z - hit.point.z);
+        if (!taken.has(i) && d < bd) { bd = d; best = i; }
+      });
+      if (best >= 0) { stand(); wantBless = false; wantBooth = 0; wantSeat = best; goal = new THREE.Vector3(seats[best].x, 0, seats[best].z); }
+    } else if (ray.ray.intersectPlane(floor, p)) { stand(); wantSeat = -1; wantBless = false; wantBooth = 0; goal = p; }
+  }
+  down = null;
+});
+addEventListener('resize', () => {
+  cam.aspect = innerWidth / innerHeight; cam.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight);
+});
+
+// 성당 고르기
+const pick = document.getElementById('pick');
+for (const k in CH) {
+  const b = document.createElement('button'); b.textContent = CH[k].name; b.dataset.k = k; pick.appendChild(b);
+  b.onclick = () => {
+    if (boothSide) exitBooth();
+    stand(); buildChurch(k); pos.set(0, 0, 22); goal = null; wantSeat = -1; yaw = 0; faceYaw.v = 0;
+    pick.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+  };
+}
+pick.firstChild.classList.add('on');
+
+// 다른 사람: room presence로 위치·좌석·기도 상태를 공유 (없으면 혼자 걷기)
+(async () => {
+  room = window.claude ? await claude.use('room') : null;
+})();
+
+const clock = new THREE.Clock(); let lastSent = '';
+(function loop() {
+  const dt = clock.getDelta(), v = new THREE.Vector3();
+  if (keys.KeyW || keys.ArrowUp) v.z -= 1;
+  if (keys.KeyS || keys.ArrowDown) v.z += 1;
+  if (keys.KeyA || keys.ArrowLeft) v.x -= 1;
+  if (keys.KeyD || keys.ArrowRight) v.x += 1;
+  if (v.lengthSq()) { if (boothSide) exitBooth(); stand(); goal = null; wantSeat = -1; wantBless = false; wantBooth = 0; v.normalize().applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw); }
+  else if (goal && seated < 0) {
+    v.copy(goal).sub(pos); v.y = 0;
+    if (v.length() < .15) {
+      goal = null;
+      if (wantBooth) { const b = wantBooth; wantBooth = 0; enterBooth(b); }
+      if (wantSeat >= 0 && !takenSeats().has(wantSeat)) {
+        seated = wantSeat; pos.set(seats[seated].x, 0, seats[seated].z); faceYaw.v = 0;
+        standBtn.hidden = prayBtn.hidden = false;
+      }
+      if (wantBless) { wantBless = false; wantBooth = 0; blessUntil = Date.now() + 2500; faceYaw.v = Math.PI; say('성수를 찍고 성호를 그었어요 ✝'); }
+      wantSeat = -1; v.set(0, 0, 0);
+    } else v.normalize();
+  }
+  if (seated < 0) {
+    if (v.lengthSq()) faceYaw.v = Math.atan2(-v.x, -v.z);
+    pos.addScaledVector(v, 4 * dt);
+    pos.x = Math.max(-3.3, Math.min(3.3, pos.x));
+    pos.z = Math.max(-19, Math.min(23.5, pos.z));
+  }
+  const pr = pray || Date.now() < blessUntil;
+  pose(me, pos.x, pos.z, faceYaw.v, seated, pr);
+
+  if (boothSide) {  // 고해성사실 안: 1인칭으로 격자창을 바라봄
+    const b = booths.find(x => x.s === boothSide.s);
+    cam.position.set(b.x - boothSide.s * .25, 1.3, boothSide.z + (boothSide.role === 'P' ? .4 : -.4)); cam.rotation.order = 'YXZ'; cam.rotation.set(.12 - pitch, yaw, 0);
+  } else {
+    const t = new THREE.Vector3(pos.x, 1.3, pos.z), d = 4;
+    cam.position.set(t.x + Math.sin(yaw) * Math.cos(pitch) * d, Math.max(.4, t.y + Math.sin(pitch) * d), t.z + Math.cos(yaw) * Math.cos(pitch) * d);
+    cam.position.x = Math.max(-3.4, Math.min(3.4, cam.position.x));
+    cam.position.z = Math.min(24.4, cam.position.z);
+    cam.lookAt(t);
+  }
+
+  const nt = net();
+  if (nt) {
+    const mine = { x: +pos.x.toFixed(2), z: +pos.z.toFixed(2), yaw: +faceYaw.v.toFixed(2), seat: seated, pray: pr, hue: +hue.toFixed(2), church: cur, veil: myVeil, hide: boothSide ? 1 : 0 };
+    const k = JSON.stringify(mine);
+    if (nt === mqNet) mqNet.presence(mine); else if (k !== lastSent) { lastSent = k; room.presence(mine); }
+    const live = {};
+    for (const p of nt.peers()) {
+      if (p.isMe) continue;
+      const q = p.presence; if (!Number.isFinite(q.x) || !Number.isFinite(q.z) || q.church !== cur) continue;
+      const av = live[p.peer] = others[p.peer] || makeAvatar(+q.hue || 0);
+      const st = q.seat >= 0 && seats[q.seat];
+      const tx = st ? st.x : Math.max(-4, Math.min(4, q.x)), tz = st ? st.z : Math.max(-25, Math.min(25, q.z));
+      const cx = av.position.x + (tx - av.position.x) * .25, cz = av.position.z + (tz - av.position.z) * .25;
+      av.visible = !q.hide; const qv = q.veil === 1 || q.veil === 2 ? q.veil : 0; if (av.veilV !== qv) setVeil(av, qv);
+      pose(av, st ? tx : cx, st ? tz : cz, st ? 0 : +q.yaw || 0, st ? q.seat : -1, q.pray);
+    }
+    for (const id in others) if (!live[id]) scene.remove(others[id]);
+    others = live;
+  }
+  renderer.render(scene, cam);
+  requestAnimationFrame(loop);
+})();
+
+// 소리: 파일 없이 WebAudio로 합성 (종 + 오르간 화음)
+let ac;
+const ctx = () => ac || (ac = new (window.AudioContext || window.webkitAudioContext)());
+document.getElementById('bell').onclick = () => {
+  const a = ctx(), t = a.currentTime, g = a.createGain();
+  g.gain.setValueAtTime(.25, t); g.gain.exponentialRampToValueAtTime(.001, t + 5); g.connect(a.destination);
+  [220, 440, 553, 661, 880].forEach((f, i) => {
+    const o = a.createOscillator(); o.frequency.value = f * (1 + i * .002); o.connect(g); o.start(t); o.stop(t + 5);
+  });
+};
+// 성가·기도소리: 페이지 안에서 WebAudio로 합성(외부 파일·유튜브 없음). 내 기기에서만 들림. 리버브로 성당 울림을 줌
+function sound(btn, label, build, wetLevel = .7) {
+  let stop = null;
+  btn.onclick = () => {
+    if (stop) { stop(); stop = null; btn.textContent = label + ' 듣기'; return; }
+    const a = ctx(); if (a.state === 'suspended') a.resume();
+    const out = a.createGain(); out.gain.value = 0; out.gain.linearRampToValueAtTime(1, a.currentTime + 3);
+    const rev = a.createConvolver(), n = a.sampleRate * 3.5, ir = a.createBuffer(2, n, a.sampleRate);
+    for (let c = 0; c < 2; c++) { const d = ir.getChannelData(c); for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / n, 2.5); }
+    rev.buffer = ir; const wet = a.createGain(); wet.gain.value = wetLevel;
+    out.connect(a.destination); out.connect(rev); rev.connect(wet); wet.connect(a.destination);
+    const end = build(a, out);
+    stop = () => { out.gain.cancelScheduledValues(a.currentTime); out.gain.setTargetAtTime(0, a.currentTime, .6); setTimeout(() => { end(); out.disconnect(); }, 2500); };
+    btn.textContent = label + ' 끄기';
+  };
+}
+const mtof = m => 440 * Math.pow(2, (m - 69) / 12);
+// 성가: 느리게 바뀌는 부드러운 화음 (D단조 진행)
+sound(document.getElementById('hymn'), '성가', (a, out) => {
+  const chords = [[50, 57, 62, 65], [46, 53, 58, 62], [53, 57, 60, 65], [48, 55, 60, 64]]; let i = 0;
+  const play = () => {
+    const t = a.currentTime, g = a.createGain(), lp = a.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 1100;
+    g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(.12, t + 3); g.gain.linearRampToValueAtTime(0, t + 9);
+    g.connect(lp); lp.connect(out);
+    for (const m of chords[i++ % 4]) for (const d of [-4, 4]) {
+      const o = a.createOscillator(); o.type = 'triangle'; o.frequency.value = mtof(m); o.detune.value = d; o.connect(g); o.start(t); o.stop(t + 9.2);
+    }
+  };
+  play(); const h = setInterval(play, 7000); return () => clearInterval(h);
+});
+// 자연 소리: 바람(천천히 세졌다 약해짐) + 가는 빗소리 + 멀리서 지저귀는 새 (리버브 약하게)
+sound(document.getElementById('asmr'), '자연 소리 ASMR', (a, out) => {
+  const n = a.sampleRate * 6, buf = a.createBuffer(1, n, a.sampleRate), d = buf.getChannelData(0); let last = 0;
+  for (let i = 0; i < n; i++) { const w = Math.random() * 2 - 1; last = (last + .02 * w) / 1.02; d[i] = last * 3.5; }  // 브라운 노이즈
+  const white = a.createBuffer(1, n, a.sampleRate), wd = white.getChannelData(0);
+  for (let i = 0; i < n; i++) wd[i] = Math.random() * 2 - 1;
+  const loop = b => { const s = a.createBufferSource(); s.buffer = b; s.loop = true; s.start(); return s; };
+  const nodes = [];
+  const wind = loop(buf), wlp = a.createBiquadFilter(), wg = a.createGain();
+  wlp.type = 'lowpass'; wlp.frequency.value = 500; wg.gain.value = .5; wind.connect(wlp); wlp.connect(wg); wg.connect(out);
+  const gust = a.createOscillator(), gf = a.createGain(), gg = a.createGain();
+  gust.frequency.value = .08; gf.gain.value = 300; gg.gain.value = .25; gust.connect(gf); gf.connect(wlp.frequency); gust.connect(gg); gg.connect(wg.gain);
+  const rain = loop(white), hp = a.createBiquadFilter(), rg = a.createGain();
+  hp.type = 'highpass'; hp.frequency.value = 4000; rg.gain.value = .03; rain.connect(hp); hp.connect(rg); rg.connect(out);
+  nodes.push(wind, gust, rain);
+  const chirp = () => {
+    const t0 = a.currentTime, pan = a.createStereoPanner(), g = a.createGain(), base = 2400 + Math.random() * 2400;
+    pan.pan.value = Math.random() * 1.6 - .8; g.connect(pan); pan.connect(out);
+    const notes = 2 + (Math.random() * 4 | 0);
+    for (let i = 0; i < notes; i++) {
+      const t = t0 + i * (.09 + Math.random() * .05), o = a.createOscillator();
+      o.frequency.setValueAtTime(base * (1 + Math.random() * .1), t); o.frequency.exponentialRampToValueAtTime(base * (1.25 + Math.random() * .3), t + .07);
+      g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(.025, t + .01); g.gain.linearRampToValueAtTime(0, t + .08);
+      o.connect(g); o.start(t); o.stop(t + .1);
+    }
+  };
+  let h; const next = () => { chirp(); h = setTimeout(next, 1500 + Math.random() * 4500); }; next();
+  return () => { clearTimeout(h); nodes.forEach(x => { try { x.stop(); } catch (e) {} }); };
+}, .15);
+</script>
+</body>
+</html>
