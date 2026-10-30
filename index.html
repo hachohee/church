@@ -34,6 +34,19 @@
   #enter svg{width:38px;height:38px}
   @keyframes glow{50%{box-shadow:0 0 44px #d9a85a99,inset 0 0 24px #d9a85a66}}
   #intro p{margin:0;font-size:14px;opacity:.85;letter-spacing:.1em}
+  #pryp{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:min(92vw,380px);display:flex;flex-direction:column;gap:8px;padding:14px;border-radius:14px;background:#fffaf0f2;border:1px solid #8a7a55;box-shadow:0 6px 24px #0005;z-index:30}
+  #pryp[hidden]{display:none}
+  #pryp textarea{font:inherit;padding:8px 10px;border:1px solid #8a7a55;border-radius:10px;min-height:96px;resize:none}
+  #pryp button{font:inherit;padding:7px 10px;border:1px solid #8a7a55;border-radius:10px;background:#fff;color:inherit}
+  #dv{position:fixed;inset:0;z-index:40;pointer-events:none;overflow:hidden;background:radial-gradient(ellipse at 50% 60%,#ffb84d22,#0000 60%)}
+  #dv .txt{position:absolute;left:50%;top:48%;transform:translate(-50%,-50%);max-width:80vw;white-space:pre-wrap;text-align:center;color:#ffe6a8;font:18px/1.6 'Noto Serif KR',Georgia,serif;text-shadow:0 0 14px #ffb84d;animation:txt 3.8s ease-in forwards}
+  @keyframes txt{0%{opacity:0;filter:blur(6px)}15%{opacity:1;filter:none}60%{opacity:1}100%{opacity:0;transform:translate(-50%,-200%) scale(.9);filter:blur(10px)}}
+  #dv svg{position:absolute;left:50%;bottom:28%;width:130px;margin-left:-65px;opacity:0;filter:drop-shadow(0 0 14px #ffc35a);animation:fly 5s ease-in forwards 1.4s}
+  @keyframes fly{0%{opacity:0;transform:translateY(0) scale(.6)}12%{opacity:1}100%{opacity:0;transform:translate(18vw,-95vh) scale(1.1)}}
+  #dv .wl{transform-origin:58px 44px;animation:flapl .32s ease-in-out infinite alternate}
+  #dv .wr{transform-origin:62px 44px;animation:flapr .32s ease-in-out infinite alternate}
+  @keyframes flapl{from{transform:rotate(14deg)}to{transform:rotate(-20deg)}}
+  @keyframes flapr{from{transform:rotate(-14deg)}to{transform:rotate(20deg)}}
   #hint{opacity:.7;margin-top:8px;font-size:12px}
 </style>
 </head>
@@ -44,6 +57,7 @@
   <p>눌러서 들어가기</p></div></div>
 <div id="net">실시간 확인 중…</div>
 <div id="pick"></div>
+<div id="pryp" hidden><b>기도문 올리기</b><textarea id="prt" maxlength="200" placeholder="하느님께 드리고 싶은 말씀을 적어 보세요."></textarea><small style="opacity:.7">이 글은 저장하거나 전송하지 않아요. 새가 하늘로 올려 줍니다.</small><div style="display:flex;gap:6px"><button id="prs" style="flex:1">올리기</button><button id="prx">닫기</button></div></div>
 <div id="gbp" hidden><b>고해성사실 방명록</b><div id="gbl"></div><input id="gbn" maxlength="12" placeholder="이름(별명)"><input id="gbm" maxlength="100" placeholder="한 줄 남기기 (개인정보는 쓰지 마세요)"><div style="display:flex;gap:6px"><button id="gbs" style="flex:1">남기기</button><button id="gbx">닫기</button></div><small id="gbi" style="opacity:.6"></small></div>
 <div id="toast"></div>
 <div id="ui">
@@ -57,6 +71,7 @@
   <button id="pray" hidden>기도하기</button>
   <button id="stand" hidden>일어나기</button>
   <button id="gb" hidden>방명록</button>
+  <button id="pry" hidden>기도문 올리기</button>
   <button id="exit" hidden>나오기</button>
   <div id="hint">바닥 클릭 · WASD · 방향키로 이동 / 의자를 클릭하면 앉아요 / 드래그로 둘러보기</div>
 </div>
@@ -523,6 +538,19 @@ setInterval(() => {
 }, 1000);
 const takenSeats = () => new Set(net() ? net().peers().filter(p => !p.isMe && p.presence.church === cur).map(p => p.presence.seat) : []);
 
+const pryBtn = document.getElementById('pry'), pryp = document.getElementById('pryp'), prt = document.getElementById('prt');
+// 기도문: 글은 화면 연출에만 쓰고 저장·전송하지 않는다. 금빛 글자가 떠오르고 새가 하늘로 올라간다
+pryBtn.onclick = () => { gbp.hidden = true; pryp.hidden = false; prt.focus(); };
+document.getElementById('prx').onclick = () => { pryp.hidden = true; };
+document.getElementById('prs').onclick = () => {
+  const text = clean(prt.value, 200); if (!text || document.getElementById('dv')) return;
+  prt.value = ''; pryp.hidden = true;
+  const d = document.createElement('div'); d.id = 'dv';
+  const t = document.createElement('div'); t.className = 'txt'; t.textContent = text; d.appendChild(t);
+  d.insertAdjacentHTML('beforeend', '<svg viewBox="0 0 120 80"><path d="M40 46 L12 40 L16 54 Z" fill="#fff0c8"/><ellipse cx="60" cy="46" rx="23" ry="11" fill="#fff4d6"/><circle cx="84" cy="38" r="7" fill="#fff4d6"/><path d="M90 37 l10 3 -10 3z" fill="#e0a640"/><path class="wl" d="M58 42 C50 20 34 8 16 6 C26 22 40 36 58 46Z" fill="#fffaf0"/><path class="wr" d="M62 42 C70 18 90 8 108 8 C98 24 80 36 62 46Z" fill="#fff8e6"/></svg>');
+  document.body.appendChild(d);
+  setTimeout(() => { d.remove(); say('기도가 하늘로 올라갔어요 🕊'); }, 6600);
+};
 const exitBtn = document.getElementById('exit'), gbBtn = document.getElementById('gb'), gbp = document.getElementById('gbp');
 const gbl = document.getElementById('gbl'), gbn = document.getElementById('gbn'), gbm = document.getElementById('gbm'), gbi = document.getElementById('gbi');
 try { (JSON.parse(localStorage.getItem('gb-local') || '[]')).forEach(([k, o]) => guestIn(k, JSON.stringify(o))); gbn.value = localStorage.getItem('gb-name') || ''; } catch (e) {}
@@ -547,11 +575,11 @@ document.getElementById('gbs').onclick = () => {
   else gbi.textContent = '남겼어요.';
 };
 function enterBooth(b) {  // b = {s: 좌/우, role: 'P' 고해자 | 'R' 신부님, z}
-  boothSide = b; pos.set(b.s * 3.3, 0, b.z); yaw = b.role === 'P' ? 0 : Math.PI; pitch = .12; me.visible = false; exitBtn.hidden = false; gbBtn.hidden = false;
+  boothSide = b; pos.set(b.s * 3.3, 0, b.z); yaw = b.role === 'P' ? 0 : Math.PI; pitch = .12; me.visible = false; exitBtn.hidden = false; gbBtn.hidden = false; pryBtn.hidden = false;
   say(b.role === 'P' ? '고해자 방에 들어왔어요' : '신부님 방에 들어왔어요');
 }
 function exitBooth() {
-  const b = boothSide; boothSide = 0; me.visible = true; exitBtn.hidden = true; gbBtn.hidden = true; gbp.hidden = true; pos.set(b.s * 3.3, 0, b.z); faceYaw.v = b.s * Math.PI / 2; yaw = b.s * Math.PI / 2;
+  const b = boothSide; boothSide = 0; me.visible = true; exitBtn.hidden = true; gbBtn.hidden = true; gbp.hidden = true; pryBtn.hidden = true; pryp.hidden = true; pos.set(b.s * 3.3, 0, b.z); faceYaw.v = b.s * Math.PI / 2; yaw = b.s * Math.PI / 2;
 }
 exitBtn.onclick = exitBooth;
 function stand() {
