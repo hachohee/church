@@ -28,6 +28,8 @@
   #intro{position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;text-align:center;color:#f3e3c0;font-family:'Noto Serif KR',Georgia,serif;background:radial-gradient(ellipse at center,#0006 0%,#000b 85%);transition:opacity 1.4s}
   #intro h1{margin:0;font-weight:400;font-size:clamp(30px,7vw,52px);letter-spacing:.12em}
   #intro small{display:block;margin-top:6px;letter-spacing:.5em;font:11px system-ui,sans-serif;opacity:.75}
+  #bname{display:block;margin:26px auto 0;width:min(70vw,220px);padding:9px 14px;border-radius:22px;border:1px solid #d9a85a88;background:#0007;color:#f6e7c4;font:inherit;font-size:15px;text-align:center;outline:none}
+  #bname::placeholder{color:#f6e7c488}
   #enter{margin:34px auto 12px;display:block;width:92px;height:92px;border-radius:50%;border:2px solid #d9a85a;background:#2a1a0833;color:#f6d28a;box-shadow:0 0 28px #d9a85a66,inset 0 0 18px #d9a85a44;cursor:pointer;animation:glow 3s ease-in-out infinite}
   #enter svg{width:38px;height:38px}
   @keyframes glow{50%{box-shadow:0 0 44px #d9a85a99,inset 0 0 24px #d9a85a66}}
@@ -37,6 +39,7 @@
 </head>
 <body>
 <div id="intro"><div><h1>온라인 성당</h1><small>CATHEDRAL</small>
+  <input id="bname" maxlength="12" placeholder="세례명 (선택)" autocomplete="off">
   <button id="enter" aria-label="들어가기"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2c1.6 2 2.6 3.4 2.6 4.8a2.6 2.6 0 0 1-5.2 0C9.4 5.400 10.600 4 12 2z" fill="currentColor"/><rect x="9" y="10" width="6" height="10" rx="1"/><path d="M7 21h10"/></svg></button>
   <p>눌러서 들어가기</p></div></div>
 <div id="net">실시간 확인 중…</div>
@@ -411,10 +414,22 @@ function makeAvatar(hue) {
   const vm = new THREE.MeshStandardMaterial({ color: 0xf5f2ea, roughness: 1, side: THREE.DoubleSide }), veil = new THREE.Group(); veil.visible = false; head.add(veil);
   const cap = new THREE.Mesh(new THREE.SphereGeometry(.225, 16, 12, 0, Math.PI * 2, 0, Math.PI * .55), vm); cap.position.y = .2; cap.rotation.x = .25; veil.add(cap);
   const drape = new THREE.Mesh(new THREE.CylinderGeometry(.22, .3, .55, 14, 1, true, -Math.PI * .55, Math.PI * 1.1), vm); drape.position.set(0, -.05, .04); veil.add(drape);
+  g.labelText = '';
   g.veil = veil; g.veilMat = vm; g.veilV = 0;
   g.hands = part(new THREE.SphereGeometry(.08, 8, 8), skin, 0, 1.05, -.3);
   g.knees = part(new THREE.BoxGeometry(.5, .14, .5), cloth, 0, .6, -.3);
   g.head = head; scene.add(g); return g;
+}
+// 머리 위 이름표(세례명): 글자를 그린 스프라이트. 남이 보낸 값은 12자 문자열로만 받음
+function setName(av, text) {
+  if (av.labelText === text) return; av.labelText = text;
+  if (av.label) { av.remove(av.label); av.label.material.map.dispose(); av.label.material.dispose(); av.label = null; }
+  if (!text) return;
+  const c = document.createElement('canvas'); c.width = 256; c.height = 64; const g = c.getContext('2d');
+  g.fillStyle = 'rgba(20,16,10,.62)'; g.beginPath(); g.roundRect(4, 8, 248, 48, 24); g.fill();
+  g.fillStyle = '#f6e7c4'; g.font = "600 28px 'Noto Serif KR', serif"; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(text, 128, 34);
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), transparent: true, depthWrite: false }));
+  sp.scale.set(1.3, .325, 1); sp.position.set(0, 2.15, 0); av.add(sp); av.label = sp;
 }
 function setVeil(av, v) { av.veilV = v; av.veil.visible = v > 0; av.veilMat.color.set(v === 2 ? 0x1a1a1a : 0xf5f2ea); }
 function pose(av, x, z, yaw, seat, pray) {
@@ -590,7 +605,12 @@ pick.firstChild.classList.add('on');
 // 입장 화면: 누르기 전까지 카메라가 천천히 흔들리고 아바타는 숨김
 let entered = false; me.visible = false;
 const intro = document.getElementById('intro');
-document.getElementById('enter').onclick = () => { entered = true; me.visible = true; intro.style.opacity = 0; intro.style.pointerEvents = 'none'; setTimeout(() => intro.remove(), 1500); };
+const bname = document.getElementById('bname'); let myName = '';
+try { bname.value = localStorage.getItem('bname') || ''; } catch (e) {}
+document.getElementById('enter').onclick = () => {
+  myName = clean(bname.value, 12); setName(me, myName); if (myName && !gbn.value) gbn.value = myName;
+  try { localStorage.setItem('bname', myName); } catch (e) {}
+  entered = true; me.visible = true; intro.style.opacity = 0; intro.style.pointerEvents = 'none'; setTimeout(() => intro.remove(), 1500); };
 try { JSON.parse(localStorage.getItem('candles') || '[]').forEach(([k, o]) => candleIn(k, JSON.stringify(o))); } catch (e) {}
 const clock = new THREE.Clock(); let lastSent = '';
 (function loop() {
@@ -641,7 +661,7 @@ const clock = new THREE.Clock(); let lastSent = '';
 
   const nt = net();
   if (nt) {
-    const mine = { x: +pos.x.toFixed(2), z: +pos.z.toFixed(2), yaw: +faceYaw.v.toFixed(2), seat: seated, pray: pr, hue: +hue.toFixed(2), church: cur, veil: myVeil, hide: boothSide ? 1 : 0 };
+    const mine = { x: +pos.x.toFixed(2), z: +pos.z.toFixed(2), yaw: +faceYaw.v.toFixed(2), seat: seated, pray: pr, hue: +hue.toFixed(2), church: cur, name: myName, veil: myVeil, hide: boothSide ? 1 : 0 };
     const k = JSON.stringify(mine);
     if (nt === mqNet) mqNet.presence(mine); else if (k !== lastSent) { lastSent = k; room.presence(mine); }
     const live = {};
@@ -652,7 +672,7 @@ const clock = new THREE.Clock(); let lastSent = '';
       const st = q.seat >= 0 && seats[q.seat];
       const tx = st ? st.x : Math.max(-4, Math.min(4, q.x)), tz = st ? st.z : Math.max(-25, Math.min(25, q.z));
       const cx = av.position.x + (tx - av.position.x) * .25, cz = av.position.z + (tz - av.position.z) * .25;
-      av.visible = !q.hide; const qv = q.veil === 1 || q.veil === 2 ? q.veil : 0; if (av.veilV !== qv) setVeil(av, qv);
+      av.visible = !q.hide; setName(av, typeof q.name === 'string' ? clean(q.name, 12) : ''); const qv = q.veil === 1 || q.veil === 2 ? q.veil : 0; if (av.veilV !== qv) setVeil(av, qv);
       pose(av, st ? tx : cx, st ? tz : cz, st ? 0 : +q.yaw || 0, st ? q.seat : -1, q.pray);
     }
     for (const id in others) if (!live[id]) scene.remove(others[id]);
