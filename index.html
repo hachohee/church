@@ -49,6 +49,7 @@
 <div id="ui">
   <button id="veil">미사보: 없음</button>
   <button id="candle">촛불 켜기</button>
+  <button id="peace">평화를 빕니다</button>
   <button id="mood">분위기: 밤</button>
   <button id="bell">종 울리기</button>
   <button id="hymn">성가 듣기</button>
@@ -431,6 +432,16 @@ function setName(av, text) {
   const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), transparent: true, depthWrite: false }));
   sp.scale.set(1.3, .325, 1); sp.position.set(0, 2.15, 0); av.add(sp); av.label = sp;
 }
+// 말풍선: "평화를 빕니다" (미사의 평화 인사). 3초 뒤 사라짐
+function setBubble(av, text) {
+  if (av.bubble) { av.remove(av.bubble); av.bubble.material.map.dispose(); av.bubble.material.dispose(); av.bubble = null; }
+  if (!text) return;
+  const c = document.createElement('canvas'); c.width = 320; c.height = 64; const g = c.getContext('2d');
+  g.fillStyle = 'rgba(255,236,190,.94)'; g.beginPath(); g.roundRect(4, 6, 312, 50, 25); g.fill();
+  g.fillStyle = '#3a2a10'; g.font = "600 25px 'Noto Serif KR', serif"; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(text, 160, 32);
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), transparent: true, depthWrite: false }));
+  sp.scale.set(1.3, .26, 1); sp.position.set(0, 2.5, 0); av.add(sp); av.bubble = sp;
+}
 function setVeil(av, v) { av.veilV = v; av.veil.visible = v > 0; av.veilMat.color.set(v === 2 ? 0x1a1a1a : 0xf5f2ea); }
 function pose(av, x, z, yaw, seat, pray) {
   av.position.set(x, seat >= 0 ? .2 : 0, z); av.rotation.y = yaw;
@@ -605,6 +616,11 @@ pick.firstChild.classList.add('on');
 // 입장 화면: 누르기 전까지 카메라가 천천히 흔들리고 아바타는 숨김
 let entered = false; me.visible = false;
 const intro = document.getElementById('intro');
+let myPeace = 0, lastPeace = 0;
+document.getElementById('peace').onclick = () => {
+  const now = Date.now(); if (boothSide || now - lastPeace < 3000) return; lastPeace = now;
+  myPeace = now; blessUntil = now + 2500; setBubble(me, '평화를 빕니다'); me.bubbleEnd = now + 3000;   // 고개 숙인 인사 자세 + 말풍선
+};
 const bname = document.getElementById('bname'); let myName = '';
 try { bname.value = localStorage.getItem('bname') || ''; } catch (e) {}
 document.getElementById('enter').onclick = () => {
@@ -646,6 +662,7 @@ const clock = new THREE.Clock(); let lastSent = '';
     pos.z = Math.max(-19, Math.min(23.5, pos.z));
   }
   const pr = pray || Date.now() < blessUntil;
+  if (me.bubble && Date.now() > me.bubbleEnd) setBubble(me, '');
   pose(me, pos.x, pos.z, faceYaw.v, seated, pr);
 
   if (boothSide) {  // 고해성사실 안: 1인칭으로 격자창을 바라봄
@@ -661,7 +678,7 @@ const clock = new THREE.Clock(); let lastSent = '';
 
   const nt = net();
   if (nt) {
-    const mine = { x: +pos.x.toFixed(2), z: +pos.z.toFixed(2), yaw: +faceYaw.v.toFixed(2), seat: seated, pray: pr, hue: +hue.toFixed(2), church: cur, name: myName, veil: myVeil, hide: boothSide ? 1 : 0 };
+    const mine = { x: +pos.x.toFixed(2), z: +pos.z.toFixed(2), yaw: +faceYaw.v.toFixed(2), seat: seated, pray: pr, hue: +hue.toFixed(2), church: cur, name: myName, peace: myPeace, veil: myVeil, hide: boothSide ? 1 : 0 };
     const k = JSON.stringify(mine);
     if (nt === mqNet) mqNet.presence(mine); else if (k !== lastSent) { lastSent = k; room.presence(mine); }
     const live = {};
@@ -672,7 +689,14 @@ const clock = new THREE.Clock(); let lastSent = '';
       const st = q.seat >= 0 && seats[q.seat];
       const tx = st ? st.x : Math.max(-4, Math.min(4, q.x)), tz = st ? st.z : Math.max(-25, Math.min(25, q.z));
       const cx = av.position.x + (tx - av.position.x) * .25, cz = av.position.z + (tz - av.position.z) * .25;
-      av.visible = !q.hide; setName(av, typeof q.name === 'string' ? clean(q.name, 12) : ''); const qv = q.veil === 1 || q.veil === 2 ? q.veil : 0; if (av.veilV !== qv) setVeil(av, qv);
+      av.visible = !q.hide; setName(av, typeof q.name === 'string' ? clean(q.name, 12) : '');
+      const pz = Number.isFinite(q.peace) ? q.peace : 0;   // 값이 바뀌면 인사한 것 (처음 보는 값은 무시)
+      if (av.peaceT === undefined) av.peaceT = pz;
+      else if (pz !== av.peaceT) {
+        av.peaceT = pz;
+        if (pz) { setBubble(av, '평화를 빕니다'); av.bubbleEnd = Date.now() + 3000; if (Math.hypot(q.x - pos.x, q.z - pos.z) < 8) say(`${(typeof q.name === 'string' && clean(q.name, 12)) || '누군가'}님이 평화를 빕니다 🕊`); }
+      }
+      if (av.bubble && Date.now() > av.bubbleEnd) setBubble(av, ''); const qv = q.veil === 1 || q.veil === 2 ? q.veil : 0; if (av.veilV !== qv) setVeil(av, qv);
       pose(av, st ? tx : cx, st ? tz : cz, st ? 0 : +q.yaw || 0, st ? q.seat : -1, q.pray);
     }
     for (const id in others) if (!live[id]) scene.remove(others[id]);
