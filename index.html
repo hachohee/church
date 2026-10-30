@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>성당 — 온라인 성당</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+KR:wght@400;600&display=swap">
 <style>
   html,body{margin:0;height:100%;background:#d2cbbb;color:#2b2519;font:14px/1.5 system-ui,sans-serif;overflow:hidden}
   canvas{display:block;touch-action:none}
@@ -21,16 +22,31 @@
   #gbl div{padding:6px 8px;border-radius:8px;background:#f1e8d4;font-size:13px;word-break:break-word}
   #gbl small{opacity:.6}
   #gbp input,#gbp button{font:inherit;padding:7px 10px;border:1px solid #8a7a55;border-radius:10px;background:#fff;color:inherit}
+  body.night #ui button,body.night #pick button,body.night #net{background:#1b1710cc;color:#f0e2c4;border-color:#6a5a3a}
+  body.night #pick button.on{background:#c9964a;color:#1b1710;border-color:#c9964a}
+  body.night #hint{color:#d8c8a0}
+  #intro{position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;text-align:center;color:#f3e3c0;font-family:'Noto Serif KR',Georgia,serif;background:radial-gradient(ellipse at center,#0006 0%,#000b 85%);transition:opacity 1.4s}
+  #intro h1{margin:0;font-weight:400;font-size:clamp(30px,7vw,52px);letter-spacing:.12em}
+  #intro small{display:block;margin-top:6px;letter-spacing:.5em;font:11px system-ui,sans-serif;opacity:.75}
+  #enter{margin:34px auto 12px;display:block;width:92px;height:92px;border-radius:50%;border:2px solid #d9a85a;background:#2a1a0833;color:#f6d28a;box-shadow:0 0 28px #d9a85a66,inset 0 0 18px #d9a85a44;cursor:pointer;animation:glow 3s ease-in-out infinite}
+  #enter svg{width:38px;height:38px}
+  @keyframes glow{50%{box-shadow:0 0 44px #d9a85a99,inset 0 0 24px #d9a85a66}}
+  #intro p{margin:0;font-size:14px;opacity:.85;letter-spacing:.1em}
   #hint{opacity:.7;margin-top:8px;font-size:12px}
 </style>
 </head>
 <body>
+<div id="intro"><div><h1>온라인 성당</h1><small>CATHEDRAL</small>
+  <button id="enter" aria-label="들어가기"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2c1.6 2 2.6 3.4 2.6 4.8a2.6 2.6 0 0 1-5.2 0C9.4 5.400 10.600 4 12 2z" fill="currentColor"/><rect x="9" y="10" width="6" height="10" rx="1"/><path d="M7 21h10"/></svg></button>
+  <p>눌러서 들어가기</p></div></div>
 <div id="net">실시간 확인 중…</div>
 <div id="pick"></div>
 <div id="gbp" hidden><b>고해성사실 방명록</b><div id="gbl"></div><input id="gbn" maxlength="12" placeholder="이름(별명)"><input id="gbm" maxlength="100" placeholder="한 줄 남기기 (개인정보는 쓰지 마세요)"><div style="display:flex;gap:6px"><button id="gbs" style="flex:1">남기기</button><button id="gbx">닫기</button></div><small id="gbi" style="opacity:.6"></small></div>
 <div id="toast"></div>
 <div id="ui">
   <button id="veil">미사보: 없음</button>
+  <button id="candle">촛불 켜기</button>
+  <button id="mood">분위기: 밤</button>
   <button id="bell">종 울리기</button>
   <button id="hymn">성가 듣기</button>
   <button id="asmr">자연 소리 ASMR 듣기</button>
@@ -73,7 +89,17 @@ const CH = {
   hanoi: { name: '고딕 대성당', bg: 0xdcd6cc, wall: '#f1efe9', vaultCol: '#bcd3ca', vault: 'pointed', ribs: 'cross', ribBrick: 'rust', pier: 'white', aisles: true,
     floor: 'plain', floorA: '#9a948a', pew: '#4a2a1a', glass: ['#3a68b8', ['#e0b030', '#c03a3a', '#4aa070']], win: 'lancet', altar: 'hanoi', light: [0xfff6e6, 0x7a6e60, .85], chandelier: true },
 };
-let cur = 'myeongdong', world = null;
+let cur = 'myeongdong', world = null, hemi = null, pts = [], beams = [], dust = null, candleLights = [];
+let mood = 'night'; try { if (localStorage.getItem('mood') === 'day') mood = 'day'; } catch (e) {}
+const candles = new Map(), DAY = 864e5; let refreshCandles = () => {};   // gid -> {s: 자리, t: 켠 시각}, 24시간 뒤 꺼짐
+const candleStands = [], candleSlots = [];   // 촛대(클릭 대상), 촛불 자리(40곳)
+const glowTex = canvasTex(64, 64, (g, w, h) => { const r = g.createRadialGradient(32, 32, 0, 32, 32, 32); r.addColorStop(0, 'rgba(255,200,120,1)'); r.addColorStop(.35, 'rgba(255,150,60,.35)'); r.addColorStop(1, 'rgba(255,120,40,0)'); g.fillStyle = r; g.fillRect(0, 0, w, h); }, 1, 1);
+const beamTex = canvasTex(64, 128, (g, w, h) => {
+  const v = g.createLinearGradient(0, 0, 0, h); v.addColorStop(0, 'rgba(255,235,190,0)'); v.addColorStop(.3, 'rgba(255,235,190,.7)'); v.addColorStop(1, 'rgba(255,235,190,0)');
+  g.fillStyle = v; g.fillRect(0, 0, w, h); g.globalCompositeOperation = 'destination-in';
+  const hz = g.createLinearGradient(0, 0, w, 0); hz.addColorStop(0, 'rgba(0,0,0,0)'); hz.addColorStop(.5, 'rgba(0,0,0,1)'); hz.addColorStop(1, 'rgba(0,0,0,0)');
+  g.fillStyle = hz; g.fillRect(0, 0, w, h);
+}, 1, 1);
 const seats = [], benchMeshes = [], fonts = [], boothDoors = [], booths = [];
 const std = map => new THREE.MeshStandardMaterial({ roughness: 1, side: THREE.DoubleSide, map });
 const BRICKS = {
@@ -159,6 +185,7 @@ function buildChurch(key) {
   world = new THREE.Group(); scene.add(world);
   scene.background.set(C.bg); scene.fog.color.set(C.bg);
   seats.length = 0; benchMeshes.length = 0; fonts.length = 0; boothDoors.length = 0; booths.length = 0;
+  pts = []; beams = []; dust = null; candleLights = []; candleStands.length = 0; candleSlots.length = 0;
   const add = (geo, m, x, y, z) => { const o = new THREE.Mesh(geo, m); o.position.set(x, y, z); world.add(o); return o; };
   const put = (o, x, y, z, ry = 0) => { o.position.set(x, y, z); o.rotation.y = ry; world.add(o); return o; };
   const wall = (rx, ry) => flat(rx, ry, C.wall);
@@ -307,9 +334,66 @@ function buildChurch(key) {
     const ring = new THREE.Mesh(new THREE.TorusGeometry(.5, .03, 6, 16), mat(0x2a2a2a)); ring.rotation.x = Math.PI / 2; ring.position.y = -1.6; g.add(ring);
     g.position.set(0, y + 1.5, z); world.add(g);
   }
-  world.add(new THREE.HemisphereLight(...C.light));
-  for (const z of [-15, -5, 5, 15]) { const l = new THREE.PointLight(0xffe9c4, .25, 24); l.position.set(0, Math.min(10, spring - 1), z); world.add(l); }
+  hemi = new THREE.HemisphereLight(...C.light); world.add(hemi);
+  for (const z of [-15, -5, 5, 15]) { const l = new THREE.PointLight(0xffe9c4, .25, 24); l.position.set(0, Math.min(10, spring - 1), z); world.add(l); pts.push(l); }
+
+  // 밤 분위기: 높은 창에서 비스듬히 내려오는 빛줄기 + 떠다니는 먼지
+  const bm = new THREE.MeshBasicMaterial({ map: beamTex, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, opacity: .4, fog: false });
+  for (const s of [-1, 1]) for (const z of [-12, -2, 8]) for (const ry of [0, Math.PI / 2]) {
+    const b = new THREE.Mesh(new THREE.PlaneGeometry(1.8, 16), bm); b.position.set(s * 2.4, spring - 6, z + s * 2); b.rotation.set(0, ry, -s * .42); world.add(b); beams.push(b);
+  }
+  const dp = new Float32Array(180 * 3); for (let i = 0; i < dp.length; i += 3) { dp[i] = (Math.random() - .5) * 7; dp[i + 1] = 1 + Math.random() * (spring - 2); dp[i + 2] = -20 + Math.random() * 42; }
+  const dg = new THREE.BufferGeometry(); dg.setAttribute('position', new THREE.BufferAttribute(dp, 3));
+  dust = new THREE.Points(dg, new THREE.PointsMaterial({ size: .05, color: 0xffe9c0, transparent: true, opacity: .55, blending: THREE.AdditiveBlending, depthWrite: false })); world.add(dust);
+
+  // 촛대 2개(입구 양옆): 촛불 자리 20곳씩. 클릭하거나 '촛불 켜기'로 켠다
+  for (const s of [-1, 1]) {
+    const cx = s * 2.9, cz = 20.3, iron = mat(0x2a2320);
+    candleStands.push(add(new THREE.BoxGeometry(2.1, .9, .55), iron, cx, .45, cz));
+    add(new THREE.BoxGeometry(2.2, .05, .66), iron, cx, .92, cz);
+    const wax = mat(0xf2e8d0), flameM = new THREE.MeshBasicMaterial({ color: 0xffc060 });
+    for (const rz of [-.12, .12]) for (let i = 0; i < 10; i++) {
+      const x = cx - .9 + i * .2, z = cz + rz;
+      add(new THREE.CylinderGeometry(.035, .035, .14, 8), wax, x, 1.02, z);
+      const flame = new THREE.Mesh(new THREE.ConeGeometry(.018, .07, 6), flameM); flame.position.set(x, 1.13, z); flame.visible = false; world.add(flame);
+      const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: .9 })); glow.scale.set(.4, .4, 1); glow.position.set(x, 1.15, z); glow.visible = false; world.add(glow);
+      candleSlots.push({ flame, glow, on: false });
+    }
+    const cl = new THREE.PointLight(0xffa850, 0, 12); cl.position.set(cx, 1.5, cz); world.add(cl); candleLights.push(cl);
+  }
+  applyMood(); refreshCandles();
 }
+
+function applyMood() {
+  const C = CH[cur], night = mood === 'night', bg = night ? 0x07070a : C.bg;
+  document.body.classList.toggle('night', night);
+  scene.background.set(bg); scene.fog.color.set(bg); scene.fog.near = night ? 8 : 25; scene.fog.far = night ? 58 : 80;
+  hemi.color.set(night ? 0xb9a688 : C.light[0]); hemi.groundColor.set(night ? 0x2a2018 : C.light[1]); hemi.intensity = night ? .26 : C.light[2];
+  pts.forEach(l => { l.userData.base = night ? .38 : .25; l.color.set(night ? 0xffc27a : 0xffe9c4); });
+  beams.forEach(b => b.visible = night); if (dust) dust.visible = night;
+  moodBtn.textContent = '분위기: ' + (night ? '밤' : '낮');
+  try { localStorage.setItem('mood', mood); } catch (e) {}
+}
+const moodBtn = document.getElementById('mood');
+moodBtn.onclick = () => { mood = mood === 'night' ? 'day' : 'night'; applyMood(); };
+refreshCandles = () => {
+  const now = Date.now(), lit = new Set();
+  for (const [k, c] of candles) { if (now - c.t > DAY) candles.delete(k); else lit.add(c.s); }
+  candleSlots.forEach((sl, i) => { sl.on = lit.has(i); sl.flame.visible = sl.glow.visible = sl.on; });
+};
+let lastCandle = 0;
+function lightCandle() {
+  if (Date.now() - lastCandle < 2000) return; lastCandle = Date.now();
+  refreshCandles();
+  const free = candleSlots.map((c, i) => c.on ? -1 : i).filter(i => i >= 0);
+  if (!free.length) { say('촛대가 가득 찼어요. 잠시 뒤에 다시 와 주세요.'); return; }
+  const e = { s: free[Math.random() * free.length | 0], t: Date.now() }, gid = e.t.toString(36) + Math.random().toString(36).slice(2, 6);
+  candles.set(gid, e); refreshCandles();
+  try { const l = JSON.parse(localStorage.getItem('candles') || '[]'); l.push([gid, e]); localStorage.setItem('candles', JSON.stringify(l.filter(x => Date.now() - x[1].t < DAY).slice(-30))); } catch (x) {}
+  mqNet.candlePublish(gid, e);   // 서버에 연결돼 있으면 다른 사람 화면에도 켜짐
+  say('촛불을 켰어요. 평안을 빕니다 🕯');
+}
+document.getElementById('candle').onclick = lightCandle;
 
 // 아바타: 몸통 + 머리(고개 숙임) + 합장한 손 + 앉을 때 무릎
 function makeAvatar(hue) {
@@ -363,6 +447,11 @@ function guestIn(gid, buf) {  // 남이 쓴 글은 믿지 않음: 길이 제한,
   if (buf.length > 600 || (!guests.has(gid) && guests.size >= 200)) return;
   try { const o = JSON.parse(buf.toString()); if (typeof o.n === 'string' && typeof o.m === 'string' && Number.isFinite(o.t)) { guests.set(gid, { n: clean(o.n, 12), m: clean(o.m, 100), t: o.t }); renderGuests(); } } catch (e) {}
 }
+function candleIn(gid, buf) {  // 남이 보낸 값은 믿지 않음: 자리 0~39 정수, 시각 숫자, 최대 400개
+  if (!buf.length) { candles.delete(gid); refreshCandles(); return; }
+  if (buf.length > 200 || (!candles.has(gid) && candles.size >= 400)) return;
+  try { const o = JSON.parse(buf.toString()); if (Number.isInteger(o.s) && o.s >= 0 && o.s < 40 && Number.isFinite(o.t)) { candles.set(gid, { s: o.s, t: o.t }); refreshCandles(); } } catch (e) {}
+}
 const mqNet = (() => {
   const prefix = 'hachohee-church-v1/', id = Math.random().toString(36).slice(2, 10), others = new Map();
   const urls = ['wss://broker.emqx.io:8084/mqtt', 'wss://broker.hivemq.com:8884/mqtt'];
@@ -371,8 +460,9 @@ const mqNet = (() => {
     if (!window.mqtt || i >= urls.length) return;
     let alive = false;
     let c; try { c = mqtt.connect(urls[i], { connectTimeout: 6000, reconnectPeriod: 3000, clientId: 'ch_' + id, will: { topic: prefix + id, payload: '' } }); } catch (e) { return connect(i + 1); }  // 보안 설정이 외부 접속을 막으면 여기로 옴
-    c.on('connect', () => { alive = true; ok = true; client = c; c.subscribe(prefix + '+'); c.subscribe(prefix + 'guest/+'); });
+    c.on('connect', () => { alive = true; ok = true; client = c; c.subscribe(prefix + '+'); c.subscribe(prefix + 'guest/+'); c.subscribe(prefix + 'candle/+'); });
     c.on('message', (t, m) => {
+      if (t.startsWith(prefix + 'candle/')) { candleIn(t.slice(prefix.length + 7), m); return; }
       if (t.startsWith(prefix + 'guest/')) { guestIn(t.slice(prefix.length + 6), m); return; }
       const pid = t.slice(prefix.length); if (pid === id || m.length > 300) return;  // 공개 채널이라 남이 보낸 값은 믿지 않음
       if (!others.has(pid) && others.size >= 60) return;
@@ -385,6 +475,7 @@ const mqNet = (() => {
   connect();
   return {
     get ok() { return ok; },
+    candlePublish(gid, o) { if (client && ok) client.publish(prefix + 'candle/' + gid, JSON.stringify(o), { retain: true, qos: 1 }); },
     guestPublish(gid, o) { if (!client || !ok) return false; client.publish(prefix + 'guest/' + gid, JSON.stringify(o), { retain: true, qos: 1 }); return true; },
     presence(p) {  // 바뀌면 최대 10번/초, 안 바뀌어도 2초마다 생존 신호
       const s = JSON.stringify(p), now = Date.now();
@@ -460,8 +551,9 @@ cv.addEventListener('pointermove', e => {
 cv.addEventListener('pointerup', e => {
   if (!dragged) {
     ray.setFromCamera({ x: e.clientX / innerWidth * 2 - 1, y: -(e.clientY / innerHeight) * 2 + 1 }, cam);
-    const hit = ray.intersectObjects(benchMeshes)[0], fh = ray.intersectObjects(fonts)[0], bh = ray.intersectObjects(boothDoors)[0], p = new THREE.Vector3();
-    if (fh) { stand(); wantSeat = -1; wantBless = true; goal = new THREE.Vector3(fh.object.position.x, 0, 23.2); }
+    const hit = ray.intersectObjects(benchMeshes)[0], cs = ray.intersectObjects(candleStands)[0], fh = ray.intersectObjects(fonts)[0], bh = ray.intersectObjects(boothDoors)[0], p = new THREE.Vector3();
+    if (cs) lightCandle();
+    else if (fh) { stand(); wantSeat = -1; wantBless = true; goal = new THREE.Vector3(fh.object.position.x, 0, 23.2); }
     else if (bh) { stand(); wantSeat = -1; wantBless = false; wantBooth = 0; wantBooth = bh.object.userData; goal = new THREE.Vector3(wantBooth.s * 3.3, 0, wantBooth.z); }
     else if (hit) {  // 가장 가까운 빈 좌석으로 걸어가서 앉기
       const taken = takenSeats(); let best = -1, bd = 1e9;
@@ -495,9 +587,20 @@ pick.firstChild.classList.add('on');
   room = window.claude ? await claude.use('room') : null;
 })();
 
+// 입장 화면: 누르기 전까지 카메라가 천천히 흔들리고 아바타는 숨김
+let entered = false; me.visible = false;
+const intro = document.getElementById('intro');
+document.getElementById('enter').onclick = () => { entered = true; me.visible = true; intro.style.opacity = 0; intro.style.pointerEvents = 'none'; setTimeout(() => intro.remove(), 1500); };
+try { JSON.parse(localStorage.getItem('candles') || '[]').forEach(([k, o]) => candleIn(k, JSON.stringify(o))); } catch (e) {}
 const clock = new THREE.Clock(); let lastSent = '';
 (function loop() {
-  const dt = clock.getDelta(), v = new THREE.Vector3();
+  const dt = clock.getDelta(), v = new THREE.Vector3(), tm = performance.now() / 1000;
+  if (!entered) { yaw = Math.sin(tm * .12) * .4; pitch = .16; }
+  pts.forEach((l, i) => { l.intensity = (l.userData.base || .25) * (1 + .07 * Math.sin(tm * 6 + i * 2.1) + .04 * Math.sin(tm * 13 + i)); });
+  const nLit = candleSlots.filter(c => c.on).length;
+  candleLights.forEach((l, i) => { l.intensity = Math.min(.9, .12 + .025 * nLit) * (1 + .1 * Math.sin(tm * 9 + i * 3)); });
+  candleSlots.forEach((c, i) => { if (c.on) { c.flame.scale.set(1, 1 + .25 * Math.sin(tm * 11 + i * 1.7), 1); c.glow.scale.setScalar(.36 + .06 * Math.sin(tm * 8 + i)); } });
+  if (dust && dust.visible) { const p = dust.geometry.attributes.position; for (let i = 0; i < p.count; i++) { p.array[i * 3 + 1] += dt * .06; p.array[i * 3] += Math.sin(tm * .3 + i) * dt * .02; if (p.array[i * 3 + 1] > 13) p.array[i * 3 + 1] = 1; } p.needsUpdate = true; }
   if (keys.KeyW || keys.ArrowUp) v.z -= 1;
   if (keys.KeyS || keys.ArrowDown) v.z += 1;
   if (keys.KeyA || keys.ArrowLeft) v.x -= 1;
