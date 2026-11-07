@@ -199,7 +199,13 @@ function arched(w, h, m) {
 
 function buildChurch(key) {
   const C = CH[key]; cur = key;
-  if (world) { scene.remove(world); world.traverse(o => o.geometry && o.geometry.dispose()); }
+  if (world) {  // 성당을 바꿀 때 지오메트리·재질·텍스처를 모두 해제 (공유 텍스처 glowTex/beamTex는 다시 쓰이므로 제외)
+    scene.remove(world);
+    world.traverse(o => {
+      if (o.geometry) o.geometry.dispose();
+      for (const m of [].concat(o.material || [])) { if (m.map && m.map !== glowTex && m.map !== beamTex) m.map.dispose(); m.dispose(); }
+    });
+  }
   texReg.length = 0;
   world = new THREE.Group(); scene.add(world);
   scene.background.set(C.bg); scene.fog.color.set(C.bg);
@@ -701,6 +707,9 @@ const clock = new THREE.Clock(); let lastSent = '';
     cam.position.set(t.x + Math.sin(yaw) * Math.cos(pitch) * d, Math.max(.4, t.y + Math.sin(pitch) * d), t.z + Math.cos(yaw) * Math.cos(pitch) * d);
     cam.position.x = Math.max(-3.4, Math.min(3.4, cam.position.x));
     cam.position.z = Math.min(24.4, cam.position.z);
+    // 뒷벽 등에 막혀 카메라가 아바타에 붙으면 머리가 화면을 가리므로, 거리(4)는 유지한 채 위로 올려서 내려다본다
+    const h = Math.hypot(cam.position.x - t.x, cam.position.z - t.z);
+    if (h < Math.cos(pitch) * d - .01) cam.position.y = Math.max(cam.position.y, t.y + Math.sqrt(Math.max(0, d * d - h * h)));
     cam.lookAt(t);
   }
 
